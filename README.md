@@ -73,7 +73,7 @@ This system enables merchants to create payment orders through secure REST APIs,
 
 ```
 git clone <REPOSITORY_URL>
-cd payment-gateway-task
+cd payment-gateway
 docker-compose up -d
 ```
 
