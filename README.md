@@ -487,8 +487,6 @@ curl http://localhost:8000/health
 curl http://localhost:8000/api/v1/test/merchant
 ```
 
-Additional test sequences available in repository under `/docs/tests.md`.
-
 ---
 
 ## Local Development (Without Docker)
