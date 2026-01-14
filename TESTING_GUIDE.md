@@ -543,3 +543,356 @@ Your implementation passes evaluation if:
 8. ✅ Dashboard displays real data (not hardcoded)
 9. ✅ Error handling returns correct error codes
 10. ✅ Database schema matches specification
+
+---
+
+## Deliverable 2 – Async Jobs, Webhooks, Refunds, SDK
+
+The sections above cover the **core payment gateway** (Deliverable 1).  
+This section adds tests specific to **Deliverable 2**: async processing, webhooks with retries, refunds, idempotency, job queues, and the embeddable SDK.
+
+> All commands assume:
+> - API: `http://localhost:8000`
+> - Dashboard: `http://localhost:3000`
+> - Checkout/SDK: `http://localhost:3001`
+> - Test merchant: `key_test_abc123` / `secret_test_xyz789`
+
+### D2-Step 1: Verify Job Queue Status Endpoint
+
+```bash
+curl -s http://localhost:8000/api/v1/test/jobs/status
+```
+
+**Expected:**
+
+```json
+{
+  "pending": 0,
+  "processing": 0,
+  "completed": 0,
+  "failed": 0,
+  "worker_status": "running"
+}
+```
+
+If `worker_status` is not `"running"`, check worker logs:
+
+```bash
+docker-compose logs worker
+```
+
+### D2-Step 2: Async Payment Creation + Idempotency
+
+1. **Create order** (same as before) and capture `<ORDER_ID>`.
+
+2. **Create payment with Idempotency-Key** (note status is `pending` immediately – processing is async):
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/payments \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789" \
+  -H "Idempotency-Key: idem_demo_1" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"order_id\": \"<ORDER_ID>\",
+    \"method\": \"upi\",
+    \"vpa\": \"user@paytm\"
+  }"
+```
+
+**Expected (example):**
+
+```json
+{
+  "id": "pay_XXXXXXXXXXXXXX",
+  "order_id": "<ORDER_ID>",
+  "amount": 50000,
+  "currency": "INR",
+  "method": "upi",
+  "status": "pending",
+  "created_at": "2026-01-14T..."
+}
+```
+
+3. **Repeat same request with same Idempotency-Key**:
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/payments \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789" \
+  -H "Idempotency-Key: idem_demo_1" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"order_id\": \"<ORDER_ID>\",
+    \"method\": \"upi\",
+    \"vpa\": \"user@paytm\"
+  }"
+```
+
+**✅ Pass Criteria:**
+- Response body is **bit‑for‑bit identical** (same `id`, same timestamps).
+- No duplicate payment rows are created in DB.
+
+4. **Poll payment status** until it becomes `success` or `failed`:
+
+```bash
+curl -s http://localhost:8000/api/v1/payments/<PAYMENT_ID> \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789"
+```
+
+With `TEST_MODE=true` and `TEST_PROCESSING_DELAY=1000`, this should switch from `pending` to `success`/`failed` in ~1–2 seconds.
+
+### D2-Step 3: Capture Endpoint
+
+If a payment is `success`, you can test capture:
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/payments/<PAYMENT_ID>/capture \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789" \
+  -H "Content-Type: application/json" \
+  -d "{\"amount\": 50000}"
+```
+
+**✅ Pass Criteria:**
+- Status code `200`.
+- Response includes `"captured": true`.
+
+If payment is not in `success` state, expect:
+
+```json
+{
+  "error": {
+    "code": "BAD_REQUEST_ERROR",
+    "description": "Payment not in capturable state"
+  }
+}
+```
+
+### D2-Step 4: Refunds (Full + Partial)
+
+1. Ensure you have a **successful payment** (`status: "success"`).
+2. **Create refund**:
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/payments/<PAYMENT_ID>/refunds \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"amount\": 25000,
+    \"reason\": \"Customer requested partial refund\"
+  }"
+```
+
+**Expected (immediately, status pending):**
+
+```json
+{
+  "id": "rfnd_XXXXXXXXXXXXXX",
+  "payment_id": "<PAYMENT_ID>",
+  "amount": 25000,
+  "reason": "Customer requested partial refund",
+  "status": "pending",
+  "created_at": "2026-01-14T..."
+}
+```
+
+3. **Poll refund**:
+
+```bash
+curl -s http://localhost:8000/api/v1/refunds/<REFUND_ID> \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789"
+```
+
+**✅ Pass Criteria:**
+- `status` moves from `pending` → `processed` after ~3–5 seconds.
+- `processed_at` is populated for processed refunds.
+- Multiple refunds on same payment are allowed, but total refunded amount **never exceeds** original payment amount. Otherwise, expect:
+
+```json
+{
+  "error": {
+    "code": "BAD_REQUEST_ERROR",
+    "description": "Refund amount exceeds available amount"
+  }
+}
+```
+
+### D2-Step 5: Webhook Configuration + Logs + Retry
+
+1. **Configure webhook URL** (e.g., pointing to a test receiver):
+
+```bash
+curl -s -X PUT http://localhost:8000/api/v1/webhooks/config \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789" \
+  -H "Content-Type: application/json" \
+  -d "{\"webhook_url\":\"http://host.docker.internal:4000/webhook\"}"
+```
+
+**Expected:**
+
+```json
+{
+  "webhook_url": "http://host.docker.internal:4000/webhook",
+  "webhook_secret": "whsec_test_abc123"
+}
+```
+
+2. **Regenerate secret** (optional):
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/webhooks/regenerate-secret \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789"
+```
+
+3. **Send test webhook**:
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/webhooks/test \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789"
+```
+
+4. **View logs**:
+
+```bash
+curl -s "http://localhost:8000/api/v1/webhooks?limit=10&offset=0" \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789"
+```
+
+**✅ Pass Criteria:**
+- Logs show events like `payment.created`, `payment.pending`, `payment.success`, `refund.created`, `refund.processed`, `webhook.test`.
+- Each log has fields: `id`, `event`, `status`, `attempts`, `created_at`, `last_attempt_at`, `response_code`.
+
+5. **Retry a failed webhook** (if any log has `status: "failed"` or you forcibly fail the receiver):
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/webhooks/<WEBHOOK_ID>/retry \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789"
+```
+
+**Expected:**
+
+```json
+{
+  "id": "<WEBHOOK_ID>",
+  "status": "pending",
+  "message": "Webhook retry scheduled"
+}
+```
+
+### D2-Step 6: Verify HMAC-SHA256 Webhook Signature
+
+Run the **test merchant webhook receiver** locally:
+
+```bash
+cd test-merchant
+npm install
+node webhook-receiver.js
+```
+
+Configure webhook URL as `http://host.docker.internal:4000/webhook` (Windows/macOS) and ensure `webhook_secret` matches `WEBHOOK_SECRET` in the receiver (defaults to `whsec_test_abc123`).
+
+Trigger payments/refunds and watch the receiver logs:
+
+- `✅ Webhook verified: payment.created`
+- `✅ Webhook verified: payment.pending`
+- `✅ Webhook verified: payment.success`
+- `✅ Webhook verified: refund.processed`
+
+**✅ Pass Criteria:**
+- Receiver prints `✅ Webhook verified: <event>` and **never** logs “Invalid signature”.
+
+### D2-Step 7: Webhook Retry Intervals (Test Mode)
+
+Ensure in `docker-compose.yml` (already configured):
+
+- `WEBHOOK_RETRY_INTERVALS_TEST: "true"` for API + worker.
+
+Modify the test receiver to **fail first N requests** (already supported in `test-merchant/webhook-receiver.js` via `FAIL_FIRST_N` env var), e.g.:
+
+```bash
+set FAIL_FIRST_N=2
+node webhook-receiver.js
+```
+
+Trigger a payment and inspect `webhook_logs`:
+
+```sql
+SELECT event, status, attempts, last_attempt_at, next_retry_at
+FROM webhook_logs
+ORDER BY created_at DESC
+LIMIT 5;
+```
+
+**✅ Pass Criteria:**
+- Attempts increment up to 5.
+- `next_retry_at` is spaced roughly at: 0s, 5s, 10s, 15s, 20s for a given log while it is still pending.
+- After 5 failed attempts, `status` becomes `failed` and no further retries are scheduled.
+
+### D2-Step 8: Embeddable SDK / Modal
+
+1. **Ensure checkout service is running** and SDK is served:
+
+```bash
+curl -s -o NUL -w "%{http_code}" http://localhost:3001/checkout.js
+```
+
+Expect `200`.
+
+2. **Simple HTML page** using the SDK:
+
+```html
+<script src="http://localhost:3001/checkout.js"></script>
+<button id="pay-button">Pay Now</button>
+<script>
+  document.getElementById('pay-button').addEventListener('click', function () {
+    const checkout = new PaymentGateway({
+      key: 'key_test_abc123',
+      orderId: '<ORDER_ID>',
+      onSuccess: function (response) {
+        console.log('Payment successful:', response.paymentId);
+      },
+      onFailure: function (error) {
+        console.log('Payment failed:', error);
+      },
+      onClose: function () {
+        console.log('Modal closed');
+      }
+    });
+    checkout.open();
+  });
+</script>
+```
+
+3. **Verify DOM structure in browser DevTools** when modal is open:
+
+- `div#payment-gateway-modal[data-test-id="payment-modal"]`
+  - `.modal-overlay`
+    - `.modal-content`
+      - `iframe[data-test-id="payment-iframe"]`
+      - `button[data-test-id="close-modal-button"]`
+
+4. **Verify postMessage flow**:
+- On successful payment in the iframe, parent page’s `onSuccess` is called.
+- On failure, `onFailure` is called.
+- When user clicks close button, `onClose` is called and modal is removed from DOM.
+
+**✅ D2 Final Checklist:**
+- [ ] `/api/v1/test/jobs/status` returns queue stats.
+- [ ] Payments are created with `status: "pending"` and move to `success`/`failed` via worker.
+- [ ] Idempotency returns identical responses for the same key (within 24h).
+- [ ] Capture endpoint works only for `success` payments.
+- [ ] Refunds support full + partial logic with async processing and `processed_at`.
+- [ ] Webhook URL + secret configurable via API / dashboard; secret used for HMAC-SHA256.
+- [ ] Webhook logs table records events, attempts, last/next retry timestamps.
+- [ ] Webhook retries follow correct interval schedule (production + test mode).
+- [ ] Manual retry endpoint resets attempts and schedules a new job.
+- [ ] SDK `checkout.js` loads, creates the correct modal DOM, and communicates via `postMessage`.

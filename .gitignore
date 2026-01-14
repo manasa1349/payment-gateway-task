@@ -28,7 +28,6 @@ docker-data/
 docker-volume/
 
 # Database / Dumps
-*.sql
 *.dump
 
 # Coverage

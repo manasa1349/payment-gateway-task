@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build && npm run build:sdk",
+    "build:sdk": "webpack --mode production"
   },
   "dependencies": {
     "react": "18.2.0",
@@ -15,6 +16,11 @@
   "devDependencies": {
     "@vitejs/plugin-react": "4.2.1",
     "vite": "5.0.10",
-    "esbuild": "0.19.12"
+    "esbuild": "0.19.12",
+    "@babel/core": "^7.23.0",
+    "@babel/preset-env": "^7.23.0",
+    "babel-loader": "^9.1.0",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.0"
   }
 }

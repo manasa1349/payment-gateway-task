@@ -1,0 +1,290 @@
+version: "1.0"
+metadata:
+  project: "Payment Gateway with Async Processing and Webhooks"
+  description: "Production-ready payment gateway with job queues, webhooks, and embeddable SDK"
+  deliverable: 2
+  language: "Node.js, React"
+
+commands:
+  setup:
+    - name: "Install dependencies"
+      commands:
+        - "cd backend && npm install"
+        - "cd ../frontend && npm install"
+        - "cd ../checkout-page && npm install"
+    
+    - name: "Build frontend assets"
+      commands:
+        - "cd frontend && npm run build"
+        - "cd ../checkout-page && npm run build"
+
+  start:
+    - name: "Start application stack"
+      command: "docker-compose up -d"
+      description: "Starts all services: PostgreSQL, Redis, API, Worker, Dashboard, Checkout"
+      
+  test:
+    - name: "Verify database connection"
+      command: "docker-compose exec -T postgres pg_isready -U gateway_user -d payment_gateway"
+      expected: "accepting connections"
+    
+    - name: "Verify Redis connection"
+      command: "docker-compose exec -T redis redis-cli ping"
+      expected: "PONG"
+    
+    - name: "Check API health"
+      command: "curl -s http://localhost:8000/health | jq '.status'"
+      expected: "healthy"
+    
+    - name: "Check Dashboard health"
+      command: "curl -s -o /dev/null -w '%{http_code}' http://localhost:3000"
+      expected: "200"
+    
+    - name: "Check Checkout health"
+      command: "curl -s -o /dev/null -w '%{http_code}' http://localhost:3001"
+      expected: "200"
+
+  verify:
+    - name: "Test Payment Creation with Idempotency"
+      steps:
+        - "Create order"
+        - "Create payment with Idempotency-Key header"
+        - "Retry same payment with same Idempotency-Key"
+        - "Verify both return identical response"
+      endpoint: "POST /api/v1/payments"
+    
+    - name: "Test Job Queue Status"
+      endpoint: "GET /api/v1/test/jobs/status"
+      expected_fields:
+        - "pending"
+        - "processing"
+        - "completed"
+        - "failed"
+        - "worker_status"
+    
+    - name: "Test Webhook Configuration"
+      endpoint: "GET /api/v1/webhooks"
+      headers:
+        - "X-Api-Key: key_test_abc123"
+        - "X-Api-Secret: secret_test_xyz789"
+    
+    - name: "Test Payment Refund"
+      steps:
+        - "Create payment"
+        - "Poll until payment succeeds"
+        - "Create refund for payment"
+        - "Verify refund status is 'pending'"
+      endpoint: "POST /api/v1/payments/{payment_id}/refunds"
+    
+    - name: "Test Webhook Retry"
+      endpoint: "POST /api/v1/webhooks/{webhook_id}/retry"
+      headers:
+        - "X-Api-Key: key_test_abc123"
+        - "X-Api-Secret: secret_test_xyz789"
+      expected: "Webhook retry scheduled"
+    
+    - name: "Test Payment Capture"
+      endpoint: "POST /api/v1/payments/{payment_id}/capture"
+      headers:
+        - "X-Api-Key: key_test_abc123"
+        - "X-Api-Secret: secret_test_xyz789"
+
+  shutdown:
+    - name: "Stop all services"
+      command: "docker-compose down"
+      description: "Gracefully stops and removes all containers"
+
+database:
+  migrations:
+    - "backend/src/db/schema.sql"
+  
+  required_tables:
+    - "merchants"
+    - "orders"
+    - "payments"
+    - "refunds"
+    - "webhook_logs"
+    - "idempotency_keys"
+
+services:
+  api:
+    port: 8000
+    health_check: "GET /health"
+    environment:
+      - "DATABASE_URL=postgresql://gateway_user:gateway_pass@postgres:5432/payment_gateway"
+      - "REDIS_URL=redis://redis:6379"
+      - "TEST_MODE=false"
+      - "WEBHOOK_RETRY_INTERVALS_TEST=false"
+
+  worker:
+    description: "Background job processor"
+    health_check: "Connects to Redis and starts processing jobs"
+    environment:
+      - "REDIS_URL=redis://redis:6379"
+      - "DATABASE_URL=postgresql://gateway_user:gateway_pass@postgres:5432/payment_gateway"
+
+  dashboard:
+    port: 3000
+    health_check: "GET /"
+
+  checkout:
+    port: 3001
+    health_check: "GET /"
+    serves: "Embeddable SDK at /checkout.js"
+
+  postgres:
+    port: 5432
+    health_check: "pg_isready -U gateway_user"
+
+  redis:
+    port: 6379
+    health_check: "redis-cli ping"
+
+endpoints:
+  create_payment:
+    method: "POST"
+    path: "/api/v1/payments"
+    auth: true
+    request_body: |
+      {
+        "order_id": "order_xyz",
+        "method": "upi",
+        "vpa": "user@paytm"
+      }
+    response: |
+      {
+        "id": "pay_...",
+        "status": "pending",
+        "created_at": "2024-01-15T10:31:00Z"
+      }
+    idempotency: true
+    async: true
+
+  capture_payment:
+    method: "POST"
+    path: "/api/v1/payments/{payment_id}/capture"
+    auth: true
+    request_body: |
+      {
+        "amount": 50000
+      }
+
+  create_refund:
+    method: "POST"
+    path: "/api/v1/payments/{payment_id}/refunds"
+    auth: true
+    request_body: |
+      {
+        "amount": 50000,
+        "reason": "Customer requested"
+      }
+    async: true
+
+  get_refund:
+    method: "GET"
+    path: "/api/v1/refunds/{refund_id}"
+    auth: true
+
+  list_webhooks:
+    method: "GET"
+    path: "/api/v1/webhooks"
+    auth: true
+    params: "limit, offset"
+
+  retry_webhook:
+    method: "POST"
+    path: "/api/v1/webhooks/{webhook_id}/retry"
+    auth: true
+
+  job_queue_status:
+    method: "GET"
+    path: "/api/v1/test/jobs/status"
+    auth: false
+    description: "Non-authenticated endpoint for job queue visibility"
+
+features:
+  async_processing:
+    enabled: true
+    queue: "Bull/Redis"
+    workers: ["PaymentWorker", "WebhookWorker", "RefundWorker"]
+
+  webhook_delivery:
+    enabled: true
+    signature: "HMAC-SHA256"
+    retry_attempts: 5
+    backoff: "exponential"
+    test_mode_intervals: true
+
+  idempotency:
+    enabled: true
+    key_header: "Idempotency-Key"
+    ttl_hours: 24
+
+  refunds:
+    enabled: true
+    types: ["full", "partial"]
+    async: true
+
+  sdk:
+    enabled: true
+    format: "UMD/IIFE"
+    location: "/checkout.js"
+    feature: "Embeddable iframe-based checkout"
+
+frontend:
+  dashboard:
+    pages:
+      - "/dashboard - Main dashboard"
+      - "/dashboard/transactions - Transaction history"
+      - "/dashboard/webhooks - Webhook configuration"
+      - "/dashboard/docs - API documentation"
+  
+  checkout:
+    pages:
+      - "/checkout - Embedded checkout form"
+    supports_iframe: true
+    postMessage_communication: true
+
+docker:
+  compose_file: "docker-compose.yml"
+  services:
+    - postgres:15-alpine
+    - redis:7-alpine
+    - api (Node.js backend)
+    - worker (Job processor)
+    - dashboard (React frontend)
+    - checkout (React checkout)
+
+expected_behavior:
+  payment_flow: |
+    1. Create payment with status 'pending'
+    2. Enqueue PaymentWorker job
+    3. Worker processes payment async
+    4. Payment status updates to 'success'/'failed'
+    5. Webhook delivery job enqueued
+    6. Webhooks sent with retry logic
+  
+  webhook_retry: |
+    Attempt 1: 0s (immediate)
+    Attempt 2: 1min (or 5s in test mode)
+    Attempt 3: 5min (or 10s in test mode)
+    Attempt 4: 30min (or 15s in test mode)
+    Attempt 5: 2hr (or 20s in test mode)
+    After 5 failures: mark as failed
+
+  refund_flow: |
+    1. Validate payment is successful
+    2. Calculate total already refunded
+    3. Create refund record with status 'pending'
+    4. Enqueue RefundWorker job
+    5. Worker processes refund (3-5s delay)
+    6. Update refund status to 'processed'
+    7. Enqueue webhook delivery
+
+notes:
+  - "Worker service must be running for async processing"
+  - "Redis connection required for job queue"
+  - "Webhook delivery requires merchant webhook_url configuration"
+  - "Test mode enables deterministic processing for evaluation"
+  - "SDK requires Webpack bundling of PaymentGateway.js"
+  - "Dashboard uses localStorage for merchant authentication"

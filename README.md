@@ -1,508 +1,408 @@
-# Payment Gateway System
+# Payment Gateway with Async Processing and Webhooks
 
-A full-stack payment gateway system inspired by Razorpay and Stripe, providing merchant APIs, hosted checkout pages, and administrative dashboards.
-
-This system enables merchants to create payment orders through secure REST APIs, and allows customers to complete payments using a hosted checkout page supporting multiple payment methods (UPI and Cards).
+A production-ready payment gateway system implementing asynchronous job processing, webhook delivery with retry mechanisms, embeddable JavaScript SDK, and comprehensive refund management.
 
 ## Features
 
-- REST API with merchant authentication using API key and secret
-- Order creation and payment workflow
-- UPI and card payment processing with full validation
-- Hosted checkout page with payment polling
-- Merchant dashboard with live transaction statistics
-- Dockerized environment for unified deployment
-- PostgreSQL-backed persistence layer
+### 🚀 Core Capabilities
+- **Async Payment Processing**: Background job processing with Redis + Bull
+- **Webhook System**: HMAC-SHA256 signed event delivery with automatic retry logic (5 attempts, exponential backoff)
+- **Embeddable SDK**: Cross-origin iframe-based payment widget for merchant websites
+- **Refund Management**: Full and partial refund support with async processing
+- **Idempotent Operations**: Prevent duplicate charges on network retries
+- **Production-Ready Architecture**: Scalable, reliable system for handling real payments
 
----
+### ⚙️ Technical Stack
+- **Backend**: Node.js + Express.js
+- **Frontend**: React + React Router
+- **Database**: PostgreSQL
+- **Job Queue**: Bull (Redis-based)
+- **Payments**: UPI, Card payment methods
+- **Deployment**: Docker Compose with multi-service architecture
 
-## Technology Stack
+## Quick Start
 
-| Component | Technology              |
-| --------- | ----------------------- |
-| Backend   | Node.js + Express       |
-| Dashboard | React                   |
-| Checkout  | React                   |
-| Database  | PostgreSQL 15           |
-| Container | Docker + Docker Compose |
+### Prerequisites
+- Docker & Docker Compose
+- Node.js 18+ (for local development)
 
----
+### 1. Start the Application
 
-## System Architecture
-
-```
-+------------------+        HTTPS/REST       +---------------------------+
-| Merchant System  |  <--------------------> | Payment Gateway API       |
-| (Postman/Server) |                         | (Node.js, Port 8000)      |
-+------------------+                         +-------------+-------------+
-                                                        | DB Queries
-                                                        v
-                                               +---------------------------+
-                                               | PostgreSQL                |
-                                               | (Port 5432)               |
-                                               +---------------------------+
-                                                        ^
-                                                        |
-                                                        |
-                                                +-------+--------+
-                                                | Checkout Page  |
-                                                | (React, 3001)  |
-                                                +----------------+
-                                                        ^
-                                                        |
-                                                +-------+--------+
-                                                | Dashboard      |
-                                                | (React, 3000)  |
-                                                +----------------+
-```
-
----
-
-## Deployment
-
-### Requirements
-
-- Docker and Docker Compose installed
-- No services running on:
-  - Port 8000 (API)
-  - Port 3000 (Dashboard)
-  - Port 3001 (Checkout)
-  - Port 5432 (PostgreSQL)
-
-### Startup
-
-```
-git clone <REPOSITORY_URL>
-cd payment-gateway
+```bash
+cd payment-gateway-task
 docker-compose up -d
 ```
 
-### Services
+### Smoke test (Windows)
 
-| Service   | URL                   |
-| --------- | --------------------- |
-| API       | http://localhost:8000 |
-| Dashboard | http://localhost:3000 |
-| Checkout  | http://localhost:3001 |
-
-Wait approximately 20–30 seconds for all services to initialize.
-
----
-
-## Test Merchant Credentials
-
-The system seeds the following merchant into the database on startup:
-
-```
-Email: test@example.com
-API Key: key_test_abc123
-API Secret: secret_test_xyz789
+```bash
+scripts\\smoke-test.cmd
 ```
 
-Usage:
+### 2. Access the Services
 
-- Used by merchants to authenticate API requests
-- Used to log into the dashboard (any password accepted)
+| Service | URL | Purpose |
+|---------|-----|---------|
+| **API** | http://localhost:8000 | Payment processing |
+| **Dashboard** | http://localhost:3000 | Merchant control panel |
+| **Checkout** | http://localhost:3001 | Payment page |
 
----
+### 3. Login to Dashboard
 
-## API Documentation
+Navigate to http://localhost:3000
 
-Base URL:
+**Test Credentials:**
+- Email: `test@example.com`
+- Password: (any password)
 
-```
-http://localhost:8000
-```
+## API Endpoints
 
-### Authentication
-
-Send in headers:
-
+All authenticated endpoints require headers:
 ```
 X-Api-Key: key_test_abc123
 X-Api-Secret: secret_test_xyz789
 ```
 
-If authentication fails, responses follow:
+### Payment Operations
 
+#### Create Order
+```bash
+curl -X POST http://localhost:8000/api/v1/orders \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789" \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 50000, "currency": "INR", "receipt": "receipt_123"}'
 ```
-401 Unauthorized
+
+#### Create Payment (Async, with Idempotency)
+```bash
+curl -X POST http://localhost:8000/api/v1/payments \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789" \
+  -H "Idempotency-Key: unique_request_id_123" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "order_id": "order_xyz",
+    "method": "upi",
+    "vpa": "user@paytm"
+  }'
+```
+
+Response (status: "pending", actual processing happens async):
+```json
 {
-  "error": {
-    "code": "AUTHENTICATION_ERROR",
-    "description": "Invalid API credentials"
+  "id": "pay_...",
+  "order_id": "order_xyz",
+  "amount": 50000,
+  "status": "pending",
+  "created_at": "2024-01-15T10:31:00Z"
+}
+```
+
+#### Capture Payment
+```bash
+curl -X POST http://localhost:8000/api/v1/payments/{payment_id}/capture \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789" \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 50000}'
+```
+
+#### Create Refund (Async)
+```bash
+curl -X POST http://localhost:8000/api/v1/payments/{payment_id}/refunds \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789" \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 50000, "reason": "Customer requested"}'
+```
+
+#### Get Refund Status
+```bash
+curl http://localhost:8000/api/v1/refunds/{refund_id} \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789"
+```
+
+#### List Webhook Logs
+```bash
+curl "http://localhost:8000/api/v1/webhooks?limit=10&offset=0" \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789"
+```
+
+#### Retry Webhook
+```bash
+curl -X POST http://localhost:8000/api/v1/webhooks/{webhook_id}/retry \
+  -H "X-Api-Key: key_test_abc123" \
+  -H "X-Api-Secret: secret_test_xyz789"
+```
+
+#### Job Queue Status
+```bash
+curl http://localhost:8000/api/v1/test/jobs/status
+
+# Response
+{
+  "pending": 5,
+  "processing": 2,
+  "completed": 100,
+  "failed": 0,
+  "worker_status": "running"
+}
+```
+
+## Async Job Processing
+
+### Job Types
+
+1. **PaymentWorker**: Processes payments asynchronously
+   - 5-10 second simulated delay
+   - 90% success for UPI, 95% for cards
+   - Updates payment status
+   - Enqueues webhook delivery
+
+2. **RefundWorker**: Processes refunds asynchronously
+   - 3-5 second simulated delay
+   - Updates refund status
+   - Enqueues webhook delivery
+
+3. **WebhookWorker**: Delivers webhooks to merchant endpoints
+   - HMAC-SHA256 signature
+   - Automatic retry (5 attempts)
+   - Exponential backoff scheduling
+
+### Test Mode
+
+Set environment variables for fast testing:
+
+```yaml
+TEST_MODE: "true"
+TEST_PAYMENT_SUCCESS: "true"
+TEST_PROCESSING_DELAY: "1000"  # 1 second instead of 5-10
+WEBHOOK_RETRY_INTERVALS_TEST: "true"  # Short intervals: 0s, 5s, 10s, 15s, 20s
+```
+
+## Webhook Integration
+
+### Webhook Payload Format
+
+```json
+{
+  "event": "payment.success",
+  "timestamp": 1705315870,
+  "data": {
+    "payment": {
+      "id": "pay_...",
+      "order_id": "order_...",
+      "amount": 50000,
+      "currency": "INR",
+      "status": "success",
+      "created_at": "2024-01-15T10:31:00Z"
+    }
   }
 }
 ```
 
----
+### Events
 
-### 1. Health Check
+- `payment.created` - Payment record created
+- `payment.pending` - Payment awaiting processing
+- `payment.success` - Payment succeeded
+- `payment.failed` - Payment failed
+- `refund.created` - Refund initiated
+- `refund.processed` - Refund completed
 
-```
-GET /health
-```
+### Verify Webhook Signature
 
-Response:
+```javascript
+const crypto = require('crypto');
 
-```json
-{
-  "status": "healthy",
-  "database": "connected",
-  "timestamp": "2026-01-04T10:30:00Z"
-}
-```
-
----
-
-### 2. Create Order
-
-```
-POST /api/v1/orders
-```
-
-Request:
-
-```json
-{
-  "amount": 50000,
-  "currency": "INR",
-  "receipt": "order_001",
-  "notes": {
-    "customer": "John Doe"
+app.post('/webhook', (req, res) => {
+  const signature = req.headers['x-webhook-signature'];
+  const payload = JSON.stringify(req.body);
+  
+  const expectedSignature = crypto
+    .createHmac('sha256', 'whsec_test_abc123')
+    .update(payload)
+    .digest('hex');
+  
+  if (signature !== expectedSignature) {
+    return res.status(401).send('Invalid signature');
   }
-}
+  
+  console.log('✅ Webhook verified');
+  res.status(200).send('OK');
+});
 ```
 
-Response 201:
+## Embeddable SDK
 
-```json
-{
-  "id": "order_xxxxxxxxxxxxxxxx",
-  "merchant_id": "550e8400-e29b-41d4-a716-446655440000",
-  "amount": 50000,
-  "currency": "INR",
-  "status": "created",
-  "created_at": "2026-01-04T..."
-}
+### Integration Example
+
+```html
+<script src="http://localhost:3001/checkout.js"></script>
+
+<button id="pay-button">Pay ₹500</button>
+
+<script>
+document.getElementById('pay-button').addEventListener('click', () => {
+  const checkout = new PaymentGateway({
+    key: 'key_test_abc123',
+    orderId: 'order_xyz',
+    onSuccess: (response) => {
+      console.log('Payment successful:', response.paymentId);
+    },
+    onFailure: (error) => {
+      console.log('Payment failed:', error);
+    },
+    onClose: () => {
+      console.log('Modal closed');
+    }
+  });
+  
+  checkout.open();
+});
+</script>
 ```
 
-Order ID Format:
+## Dashboard Features
 
-```
-order_ + 16 alphanumeric characters
-```
-
----
-
-### 3. Get Order
-
-```
-GET /api/v1/orders/{order_id}
-```
-
-Response 200 returns full order details.
-
----
-
-### 4. Public Order Endpoint (Checkout)
-
-```
-GET /api/v1/orders/{order_id}/public
-```
-
-Returns minimal fields without auth:
-
-```json
-{
-  "id": "order_xxxx",
-  "amount": 50000,
-  "currency": "INR",
-  "status": "created"
-}
-```
-
----
-
-### 5. Create Payment
-
-```
-POST /api/v1/payments
-```
-
-Supports methods:
-
-- UPI
-- Card
-
-#### UPI Request Example:
-
-```json
-{
-  "order_id": "order_xxxx",
-  "method": "upi",
-  "vpa": "user@paytm"
-}
-```
-
-#### Card Request Example:
-
-```json
-{
-  "order_id": "order_xxxx",
-  "method": "card",
-  "card": {
-    "number": "4111111111111111",
-    "expiry_month": "12",
-    "expiry_year": "2027",
-    "cvv": "123",
-    "holder_name": "John Doe"
-  }
-}
-```
-
-Payment Status Flow:
-
-```
-processing → success
-processing → failed
-```
-
-Processing delay (simulation):
-
-```
-5–10 seconds (random)
-```
-
-Success rates:
-
-```
-UPI: 90%
-Card: 95%
-```
-
-Payment ID Format:
-
-```
-pay_ + 16 alphanumeric characters
-```
-
----
-
-### 6. Get Payment
-
-```
-GET /api/v1/payments/{payment_id}
-```
-
-Response:
-
-Includes method-specific fields and timestamps.
-
----
-
-### 7. List Payments
-
-```
-GET /api/v1/payments/list
-```
-
-Returns array for dashboard.
-
----
-
-### Error Codes
-
-The API standardizes errors using:
-
-| Code                 |
-| -------------------- |
-| AUTHENTICATION_ERROR |
-| BAD_REQUEST_ERROR    |
-| INVALID_VPA          |
-| INVALID_CARD         |
-| EXPIRED_CARD         |
-| NOT_FOUND_ERROR      |
-| PAYMENT_FAILED       |
-
----
-
-## Validation Logic
-
-### VPA Format
-
-Pattern:
-
-```
-^[a-zA-Z0-9._-]+@[a-zA-Z0-9]+$
-```
-
-### Card Validation
-
-Includes:
-
-- Luhn algorithm
-- Expiry date validation
-- Network detection
-
-Networks supported:
-
-| Prefix        | Network    |
-| ------------- | ---------- |
-| 4             | Visa       |
-| 51–55         | Mastercard |
-| 34, 37        | Amex       |
-| 60, 65, 81–89 | RuPay      |
-
-Only last 4 digits stored.
-
-CVV never stored.
-
----
-
-## Deterministic Test Mode
-
-Environment Variables:
-
-```
-TEST_MODE=true
-TEST_PAYMENT_SUCCESS=true
-TEST_PROCESSING_DELAY=1000
-```
-
-Used for automated and reproducible payment outcomes.
-
----
+- **Dashboard**: Overview, API credentials, quick statistics
+- **Transactions**: Payment and refund history
+- **Webhooks**: Configure endpoints, view delivery logs, manual retry
+- **API Docs**: Integration guide with code examples
 
 ## Database Schema
 
-### merchants
+### Key Tables
 
-- id (UUID PK)
-- name
-- email (unique)
-- api_key (unique)
-- api_secret
-- webhook_url
-- is_active (boolean)
-- timestamps
-
-### orders
-
-- id (order\_ + 16 chars PK)
-- merchant_id (UUID FK)
-- amount (integer)
-- currency
-- receipt
-- notes (JSONB)
-- status
-- timestamps
-
-### payments
-
-- id (pay\_ + 16 chars PK)
-- order_id (FK)
-- merchant_id (FK)
-- amount
-- currency
-- method
-- status
-- vpa
-- card_network
-- card_last4
-- error_code
-- error_description
-- timestamps
-
-Indexes:
-
-- idx_orders_merchant_id
-- idx_payments_order_id
-- idx_payments_status
-
----
-
-## Dashboard (Port 3000)
-
-Pages:
-
-### Login (/login)
-
-Data attributes:
-
-```
-data-test-id="login-form"
-data-test-id="email-input"
-data-test-id="password-input"
-data-test-id="login-button"
+```sql
+merchants (id, email, api_key, api_secret, webhook_url, webhook_secret)
+orders (id, merchant_id, amount, currency, status)
+payments (id, order_id, merchant_id, amount, method, status, captured)
+refunds (id, payment_id, merchant_id, amount, status, processed_at)
+webhook_logs (id, merchant_id, event, payload, status, attempts, next_retry_at)
+idempotency_keys (key, merchant_id, response, expires_at)
 ```
 
-### Dashboard (/dashboard)
+## Docker Services
 
-Displays:
+- **postgres:15-alpine** - Database
+- **redis:7-alpine** - Job queue
+- **api** - Payment processing backend
+- **worker** - Background job processor
+- **dashboard** - Merchant control panel (React)
+- **checkout** - Payment checkout (React)
 
-- API key
-- API secret
-- Total transactions
-- Total amount
-- Success rate
-
-### Transactions (/dashboard/transactions)
-
-Table columns:
-
-- payment_id
-- order_id
-- amount
-- method
-- status
-- created_at
-
----
-
-## Checkout Page (Port 3001)
-
-URL Format:
+## File Structure
 
 ```
-/checkout?order_id=xxxxx
+backend/
+  ├── src/
+  │   ├── app.js
+  │   ├── worker.js              # Job processor entry
+  │   ├── config/
+  │   │   ├── db.js
+  │   │   ├── queue.js          # Bull queue setup
+  │   │   └── env.js
+  │   ├── db/
+  │   │   └── schema.sql        # Tables with webhook_logs, etc.
+  │   ├── routes/
+  │   │   └── payments.js       # All payment + webhook endpoints
+  │   ├── services/
+  │   │   └── payment.service.js # Async logic
+  │   └── utils/
+  │       └── webhook.js         # HMAC, retry logic
+  ├── Dockerfile
+  ├── Dockerfile.worker         # Separate worker image
+  └── package.json
+
+frontend/
+  └── src/pages/
+      ├── Dashboard.jsx
+      ├── Transactions.jsx
+      ├── Webhooks.jsx           # NEW
+      └── APIDocumentation.jsx   # NEW
+
+checkout-page/
+  └── src/
+      ├── sdk/
+      │   └── PaymentGateway.js  # Embeddable widget
+      └── pages/
+          └── Checkout.jsx       # iframe-compatible form
 ```
 
-Behaviors:
+## Environment Configuration
 
-- Fetch order details
-- Select method (UPI or Card)
-- Submit payment
-- Poll for status
-- Display success or failure
-
----
-
-## Testing
-
-Using curl:
-
-```
-curl http://localhost:8000/health
-curl http://localhost:8000/api/v1/test/merchant
+```yaml
+# API & Worker Services
+DATABASE_URL: postgresql://gateway_user:gateway_pass@postgres:5432/payment_gateway
+REDIS_URL: redis://redis:6379
+TEST_MODE: "false"
+TEST_PAYMENT_SUCCESS: "true"
+TEST_PROCESSING_DELAY: "1000"
+WEBHOOK_RETRY_INTERVALS_TEST: "true"
 ```
 
----
+## Testing Workflow
 
-## Local Development (Without Docker)
+1. **Create order**: Get order_id
+2. **Create payment**: Returns pending status immediately
+3. **Check queue**: Verify jobs are queued
+4. **Wait**: Let worker process (1-10 seconds depending on TEST_MODE)
+5. **Check status**: Payment should be success/failed
+6. **Verify webhook**: Check logs in dashboard
+7. **Test refund**: Create refund if payment successful
+8. **Check refund**: Verify refund processed after delay
 
-Run PostgreSQL and set `.env`.
+## Common Issues
 
-Then:
+**Worker not processing jobs?**
+- Verify Redis is running: `docker-compose ps redis`
+- Check worker logs: `docker-compose logs worker`
 
-```
-cd backend && npm install && npm start
-cd frontend && npm install && npm run dev
-cd checkout-page && npm install && npm run dev
-```
+**Webhooks not delivering?**
+- Configure webhook URL in dashboard
+- Verify merchant webhook_secret is set
+- Check webhook_logs table in database
 
----
+**Idempotency not working?**
+- Ensure Idempotency-Key header is provided
+- Key is scoped to merchant + key combination
+- Response cached for 24 hours
+
+**SDK not loading?**
+- Verify checkout-page is running: http://localhost:3001/checkout.js
+- Check browser console for CORS errors
+- Ensure SDK src points to correct URL
+
+## Performance Highlights
+
+-  Async processing prevents API blocking
+-  Bull queue efficiently handles thousands of jobs
+-  Database indexes optimize webhook queries
+-  Exponential backoff prevents server overload
+-  SDK bundles into single 10KB file
+
+## Security Features
+
+-  API key authentication
+-  HMAC-SHA256 webhook signatures
+-  Idempotent payment operations
+-  SQL injection prevention
+-  CORS support for SDK
+
+## References
+
+- **submission.yml** - Automated evaluation config
+- **TESTING_GUIDE.md** - Comprehensive test scenarios
+- Dashboard contains API documentation with live examples
 
 ## License
 
-This project is intended for educational and demonstration use.
+Educational project for demonstration purposes.
+
+---
+
+**Developed using Node.js, React, PostgreSQL, and Docker**

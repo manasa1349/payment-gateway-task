@@ -28,13 +28,14 @@ export async function initDatabase() {
 
     // Seed test merchant
     const seedQuery = `
-      INSERT INTO merchants (id, name, email, api_key, api_secret)
+      INSERT INTO merchants (id, name, email, api_key, api_secret, webhook_secret)
       VALUES (
         '550e8400-e29b-41d4-a716-446655440000',
         'Test Merchant',
         $1,
         $2,
-        $3
+        $3,
+        'whsec_test_abc123'
       )
       ON CONFLICT (email) DO NOTHING;
     `;
@@ -44,6 +45,15 @@ export async function initDatabase() {
       env.TEST_API_KEY,
       env.TEST_API_SECRET
     ]);
+
+    // Ensure webhook_secret exists for the test merchant even if it was seeded earlier.
+    await pool.query(
+      `UPDATE merchants
+       SET webhook_secret = COALESCE(webhook_secret, 'whsec_test_abc123'),
+           updated_at = NOW()
+       WHERE email = $1`,
+      [env.TEST_MERCHANT_EMAIL]
+    );
 
     console.log("Test merchant seeded (or already exists)");
   } catch (err) {

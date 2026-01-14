@@ -5,6 +5,8 @@ dotenv.config();
 export const env = {
   PORT: process.env.PORT || 8000,
   DATABASE_URL: process.env.DATABASE_URL,
+  REDIS_URL: process.env.REDIS_URL,
+  WEBHOOK_RETRY_INTERVALS_TEST: process.env.WEBHOOK_RETRY_INTERVALS_TEST === "true",
 
   TEST_MERCHANT_EMAIL: process.env.TEST_MERCHANT_EMAIL,
   TEST_API_KEY: process.env.TEST_API_KEY,

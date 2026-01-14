@@ -1,5 +1,6 @@
 import express from "express";
 import { pool } from "../config/db.js";
+import { getQueueStatus } from "../config/queue.js";
 
 const router = express.Router();
 
@@ -24,6 +25,20 @@ router.get("/merchant", async (req, res) => {
     api_key: result.rows[0].api_key,
     seeded: true
   });
+});
+
+router.get("/jobs/status", async (req, res) => {
+  try {
+    const status = await getQueueStatus();
+    res.status(200).json(status);
+  } catch (err) {
+    res.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        description: "Failed to fetch queue status"
+      }
+    });
+  }
 });
 
 export default router;

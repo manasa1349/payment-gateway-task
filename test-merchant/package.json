@@ -1,0 +1,14 @@
+{
+  "name": "test-merchant-webhook-receiver",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node webhook-receiver.js"
+  },
+  "dependencies": {
+    "express": "4.18.2"
+  }
+}
+
+
