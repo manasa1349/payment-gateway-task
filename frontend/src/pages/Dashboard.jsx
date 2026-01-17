@@ -85,7 +85,7 @@ export default function Dashboard() {
       {/* Navigation */}
       <nav style={styles.nav}>
         <div style={styles.navContent}>
-          <h1 style={styles.navTitle}>💳 Payment Gateway</h1>
+          <h1 style={styles.navTitle}> Payment Gateway</h1>
           <div style={styles.navLinks}>
             <Link to="/dashboard" style={styles.navLink}>Dashboard</Link>
             <Link to="/dashboard/transactions" style={styles.navLink}>Transactions</Link>
@@ -185,13 +185,13 @@ export default function Dashboard() {
         <section style={styles.featuresSection}>
           <h3 style={styles.sectionHeading}>Key Features</h3>
           <ul style={styles.featureList}>
-            <li>🚀 Async payment processing with job queues</li>
-            <li>🔐 Webhook delivery with HMAC-SHA256 signatures</li>
-            <li>🔄 Automatic retry logic with exponential backoff</li>
-            <li>💳 Embeddable payment SDK for iframe integration</li>
-            <li>🔁 Full and partial refund support</li>
-            <li>🛡️ Idempotent API operations</li>
-            <li>📊 Production-ready architecture</li>
+            <li>Async payment processing with job queues</li>
+            <li>Webhook delivery with HMAC-SHA256 signatures</li>
+            <li>Automatic retry logic with exponential backoff</li>
+            <li>Embeddable payment SDK for iframe integration</li>
+            <li>Full and partial refund support</li>
+            <li>Idempotent API operations</li>
+            <li>Production-ready architecture</li>
           </ul>
         </section>
       </div>
